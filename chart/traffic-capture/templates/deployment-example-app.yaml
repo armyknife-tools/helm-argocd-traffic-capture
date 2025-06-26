@@ -1,0 +1,54 @@
+{{- if .Values.exampleApp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-example-app
+  labels:
+    {{- include "traffic-capture.exampleAppLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.exampleApp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "traffic-capture.selectorLabels" . | nindent 6 }}
+      app: example-app
+  template:
+    metadata:
+      labels:
+        {{- include "traffic-capture.selectorLabels" . | nindent 8 }}
+        app: example-app
+    spec:
+      containers:
+      - name: app
+        image: "{{ .Values.exampleApp.image.repository }}:{{ .Values.exampleApp.image.tag }}"
+        imagePullPolicy: {{ .Values.exampleApp.image.pullPolicy }}
+        args:
+          - -text={"status":"success","customer_id":12345,"balance":1500.50,"ssn":"123-45-6789","credit_card":"4111-1111-1111-1111"}
+          - -listen=:8080
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          limits:
+            cpu: 50m
+            memory: 128Mi
+          requests:
+            cpu: 20m
+            memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-app
+  labels:
+    {{- include "traffic-capture.exampleAppLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "traffic-capture.selectorLabels" . | nindent 4 }}
+    app: example-app
+{{- end }}

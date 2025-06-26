@@ -1,0 +1,33 @@
+# Claude IDE files
+.claude/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Kubernetes generated files
+*.kubeconfig
+
+# Helm generated files
+*.tgz
+charts/*.tgz
+
+# ArgoCD application manifests (if generated)
+traffic-capture-app.yaml

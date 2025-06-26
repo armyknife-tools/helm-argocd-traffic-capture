@@ -1,0 +1,104 @@
+# Development environment values
+global:
+  environment: dev
+  # namespace will be set by helm install or values override
+
+capture:
+  enabled: true
+  samplingRate: "1.0"  # Capture 100% in dev
+  maxBodySize: "16384"
+  maskSensitiveData: true
+
+proxy:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: node
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    healthPort: 8081
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  istioSidecar:
+    inject: false
+
+collector:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: node
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 9000
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  persistence:
+    enabled: false  # Use ephemeral storage in dev
+  istioSidecar:
+    inject: false
+
+exampleApp:
+  enabled: true  # Include test app
+  replicaCount: 1
+  image:
+    repository: hashicorp/http-echo
+    tag: "0.2.3"
+    pullPolicy: IfNotPresent
+  istioSidecar:
+    inject: true
+
+testClient:
+  enabled: true  # Include test utilities
+  image:
+    repository: nicolaka/netshoot
+    tag: latest
+    pullPolicy: IfNotPresent
+  istioSidecar:
+    inject: true
+
+virtualService:
+  namespaceScoped:
+    enabled: true
+  globalRouting:
+    enabled: false
+
+# Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+    - ALL
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Other defaults
+nodeSelector: {}
+tolerations: []
+affinity: {}

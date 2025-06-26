@@ -1,0 +1,36 @@
+{{- if .Values.collector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-collector
+  labels:
+    {{- include "traffic-capture.collectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.collector.service.type }}
+  ports:
+    - port: {{ .Values.collector.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "traffic-capture.selectorLabels" . | nindent 4 }}
+    app: traffic-collector
+---
+# Direct access service (bypasses VirtualService routing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: traffic-collector
+  labels:
+    {{- include "traffic-capture.collectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.collector.service.type }}
+  ports:
+    - port: {{ .Values.collector.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "traffic-capture.selectorLabels" . | nindent 4 }}
+    app: traffic-collector
+{{- end }}

@@ -1,0 +1,13 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-proxy-config
+  labels:
+    {{- include "traffic-capture.proxyLabels" . | nindent 4 }}
+data:
+  sampling_rate: "{{ .Values.capture.samplingRate }}"
+  collector_url: "http://{{ include "traffic-capture.fullname" . }}-collector:{{ .Values.collector.service.port }}/collect"
+  max_body_size: "{{ .Values.capture.maxBodySize }}"
+  mask_sensitive_data: "{{ .Values.capture.maskSensitiveData }}"
+{{- end }}

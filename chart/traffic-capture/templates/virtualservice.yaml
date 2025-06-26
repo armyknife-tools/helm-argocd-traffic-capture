@@ -1,0 +1,108 @@
+{{- if .Values.virtualService.namespaceScoped.enabled }}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-wildcard
+  labels:
+    {{- include "traffic-capture.labels" . | nindent 4 }}
+spec:
+  hosts:
+  - "*.{{ .Values.global.namespace | default .Release.Namespace }}.svc.cluster.local"
+  exportTo:
+  - "."  # Only export within namespace
+  gateways:
+  - mesh
+  http:
+  - match:
+    - headers:
+        ":authority":
+          regex: "^{{ include "traffic-capture.fullname" . }}-proxy.*"
+    route:
+    - destination:
+        host: {{ include "traffic-capture.fullname" . }}-proxy.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.proxy.service.port }}
+    headers:
+      request:
+        remove:
+        - x-original-host
+  - match:
+    - headers:
+        ":authority":
+          regex: "^passthrough-proxy.*"
+    route:
+    - destination:
+        host: passthrough-proxy.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.proxy.service.port }}
+    headers:
+      request:
+        remove:
+        - x-original-host
+  - match:
+    - headers:
+        ":authority":
+          regex: "^{{ include "traffic-capture.fullname" . }}-collector.*"
+    route:
+    - destination:
+        host: {{ include "traffic-capture.fullname" . }}-collector.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.collector.service.port }}
+  - match:
+    - headers:
+        ":authority":
+          regex: "^traffic-collector.*"
+    route:
+    - destination:
+        host: traffic-collector.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.collector.service.port }}
+  # Default route - capture all other traffic
+  - route:
+    - destination:
+        host: passthrough-proxy.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.proxy.service.port }}
+    headers:
+      request:
+        set:
+          x-original-host: "%REQ(:AUTHORITY)%"
+{{- end }}
+{{- if .Values.virtualService.globalRouting.enabled }}
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-global
+  namespace: {{ .Values.virtualService.globalRouting.namespace }}
+  labels:
+    {{- include "traffic-capture.labels" . | nindent 4 }}
+spec:
+  hosts:
+  {{- range .Values.virtualService.globalRouting.hosts }}
+  - {{ . | quote }}
+  {{- end }}
+  exportTo:
+  - "*"  # Export globally
+  gateways:
+  - mesh
+  http:
+  # Exclude system namespaces
+  - match:
+    - headers:
+        ":authority":
+          regex: "^[^.]+\\.(kube-system|kube-public|kube-node-lease|istio-system|cert-manager|argocd)\\.svc\\.cluster\\.local$"
+    route:
+    - destination:
+        host: "%REQ(:AUTHORITY)%"
+  # Route to proxy for capture
+  - route:
+    - destination:
+        host: passthrough-proxy.{{ .Release.Namespace }}.svc.cluster.local
+        port:
+          number: {{ .Values.proxy.service.port }}
+    headers:
+      request:
+        set:
+          x-original-host: "%REQ(:AUTHORITY)%"
+{{- end }}

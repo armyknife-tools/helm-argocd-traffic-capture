@@ -1,0 +1,18 @@
+{{- if .Values.istio.peerAuthentication.enabled }}
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-permissive
+  labels:
+    {{- include "traffic-capture.labels" . | nindent 4 }}
+spec:
+  # Allow both mTLS and plain text traffic
+  # This ensures compatibility whether namespace has Istio injection or not
+  mtls:
+    mode: PERMISSIVE
+  {{- if .Values.istio.peerAuthentication.selector }}
+  selector:
+    matchLabels:
+      {{- toYaml .Values.istio.peerAuthentication.selector | nindent 6 }}
+  {{- end }}
+{{- end }}

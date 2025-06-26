@@ -1,0 +1,17 @@
+{{- if and .Values.collector.enabled .Values.collector.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-collector
+  labels:
+    {{- include "traffic-capture.collectorLabels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.collector.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.collector.persistence.size }}
+  {{- if .Values.collector.persistence.storageClass }}
+  storageClassName: {{ .Values.collector.persistence.storageClass }}
+  {{- end }}
+{{- end }}

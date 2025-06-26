@@ -1,0 +1,187 @@
+{{- if .Values.collector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-collector
+  labels:
+    {{- include "traffic-capture.collectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.collector.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "traffic-capture.selectorLabels" . | nindent 6 }}
+      app: traffic-collector
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "{{ .Values.collector.istioSidecar.inject }}"
+      labels:
+        {{- include "traffic-capture.selectorLabels" . | nindent 8 }}
+        app: traffic-collector
+        sidecar.istio.io/inject: "{{ .Values.collector.istioSidecar.inject }}"
+    spec:
+      serviceAccountName: {{ include "traffic-capture.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: collector
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        image: "{{ .Values.collector.image.repository }}:{{ .Values.collector.image.tag }}"
+        imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          cd /tmp
+          cat > collector.js << 'EOF'
+          const http = require('http');
+          const fs = require('fs');
+
+          // In-memory storage (replace with database for production)
+          const captures = [];
+          const MAX_CAPTURES = 10000;
+
+          const server = http.createServer((req, res) => {
+            if (req.method === 'POST' && req.url === '/collect') {
+              let body = '';
+              req.on('data', chunk => body += chunk);
+              req.on('end', () => {
+                try {
+                  const data = JSON.parse(body);
+                  
+                  // Add to memory store
+                  captures.push(data);
+                  if (captures.length > MAX_CAPTURES) {
+                    captures.shift(); // Remove oldest
+                  }
+                  
+                  // Log summary
+                  console.log('[COLLECTED]', JSON.stringify({
+                    timestamp: new Date().toISOString(),
+                    source: data.source,
+                    destination: data.destination,
+                    method: data.request.method,
+                    url: data.request.url,
+                    status: data.response.status,
+                    duration_ms: data.response.duration_ms,
+                    headers_count: Object.keys(data.request.headers).length,
+                    body_size: data.request.body ? data.request.body.length : 0
+                  }));
+                  
+                  // Append to file for persistence if volume is mounted
+                  try {
+                    fs.appendFileSync('/data/captures.jsonl', JSON.stringify(data) + '\n');
+                  } catch (e) {
+                    // Ignore file write errors in case /data is not writable
+                  }
+                  
+                  res.writeHead(200, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ status: 'collected', id: Date.now() }));
+                } catch (e) {
+                  console.error('Invalid JSON:', e);
+                  res.writeHead(400);
+                  res.end('Invalid JSON');
+                }
+              });
+            } else if (req.method === 'GET' && req.url === '/health') {
+              res.writeHead(200);
+              res.end('OK');
+            } else if (req.method === 'GET' && req.url.startsWith('/query')) {
+              // Return last N captures
+              const url = new URL(req.url, 'http://localhost');
+              const limit = parseInt(url.searchParams.get('limit') || '10');
+              const offset = parseInt(url.searchParams.get('offset') || '0');
+              
+              const results = captures.slice(-limit - offset, -offset || undefined);
+              
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(results, null, 2));
+            } else if (req.method === 'GET' && req.url === '/stats') {
+              // Return statistics
+              const stats = {
+                total_captures: captures.length,
+                start_time: captures.length > 0 ? captures[0].timestamp : null,
+                last_capture: captures.length > 0 ? captures[captures.length - 1].timestamp : null,
+                destinations: {},
+                methods: {},
+                status_codes: {}
+              };
+              
+              captures.forEach(capture => {
+                // Count by destination
+                const dest = capture.destination.service + '.' + capture.destination.namespace;
+                stats.destinations[dest] = (stats.destinations[dest] || 0) + 1;
+                
+                // Count by method
+                stats.methods[capture.request.method] = (stats.methods[capture.request.method] || 0) + 1;
+                
+                // Count by status code
+                const status = capture.response.status;
+                if (status) {
+                  stats.status_codes[status] = (stats.status_codes[status] || 0) + 1;
+                }
+              });
+              
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(stats, null, 2));
+            } else {
+              res.writeHead(404);
+              res.end('Not Found');
+            }
+          });
+
+          const PORT = {{ .Values.collector.service.port }};
+          server.listen(PORT, () => {
+            console.log('Traffic collector listening on port ' + PORT);
+            console.log('Endpoints:');
+            console.log('  POST /collect - Submit captured traffic');
+            console.log('  GET /query?limit=10 - Query captured traffic');
+            console.log('  GET /stats - View statistics');
+            console.log('  GET /health - Health check');
+          });
+          EOF
+          
+          node collector.js
+        ports:
+        - name: http
+          containerPort: {{ .Values.collector.service.port }}
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.collector.resources | nindent 10 }}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        {{- if .Values.collector.persistence.enabled }}
+        persistentVolumeClaim:
+          claimName: {{ include "traffic-capture.fullname" . }}-collector
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

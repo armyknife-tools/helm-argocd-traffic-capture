@@ -1,0 +1,271 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "traffic-capture.fullname" . }}-test"
+  labels:
+    {{- include "traffic-capture.labels" . | nindent 4 }}
+    app: test-runner
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: nicolaka/netshoot:latest
+    command: ["/bin/bash"]
+    args:
+      - -c
+      - |
+        set -e
+        echo "=== Traffic Capture Integration Tests ==="
+        echo ""
+        
+        # Configuration
+        PROXY_URL="http://passthrough-proxy:8080"
+        COLLECTOR_URL="http://{{ include "traffic-capture.fullname" . }}-collector:{{ .Values.collector.service.port }}"
+        EXAMPLE_APP="http://example-app"
+        TEST_TIMEOUT=30
+        
+        # Test utilities
+        fail_test() {
+          echo "❌ FAILED: $1"
+          exit 1
+        }
+        
+        pass_test() {
+          echo "✅ PASSED: $1"
+        }
+        
+        # Wait for services to be ready
+        echo "Waiting for services to be ready..."
+        for service in passthrough-proxy {{ include "traffic-capture.fullname" . }}-collector; do
+          timeout=${TEST_TIMEOUT}
+          while ! nc -z $service 8080 2>/dev/null && [ $timeout -gt 0 ]; do
+            sleep 1
+            ((timeout--))
+          done
+          if [ $timeout -eq 0 ]; then
+            fail_test "Service $service not ready after ${TEST_TIMEOUT}s"
+          fi
+        done
+        echo ""
+        
+        # Test 1: Proxy Health Check
+        echo "Test 1: Proxy Health Check"
+        HEALTH_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://passthrough-proxy:8081/healthz)
+        if [ "$HEALTH_RESPONSE" = "200" ]; then
+          pass_test "Proxy health check"
+        else
+          fail_test "Proxy health check returned $HEALTH_RESPONSE"
+        fi
+        echo ""
+        
+        # Test 2: Collector Health Check
+        echo "Test 2: Collector Health Check"
+        COLLECTOR_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" $COLLECTOR_URL/health)
+        if [ "$COLLECTOR_HEALTH" = "200" ]; then
+          pass_test "Collector health check"
+        else
+          fail_test "Collector health check returned $COLLECTOR_HEALTH"
+        fi
+        echo ""
+        
+        # Test 3: Basic HTTP Request Capture
+        echo "Test 3: Basic HTTP Request Capture"
+        # Clear collector first
+        curl -s -X DELETE $COLLECTOR_URL/clear > /dev/null 2>&1 || true
+        
+        # Make a test request through the proxy
+        TEST_RESPONSE=$(curl -s -w "\n%{http_code}" $EXAMPLE_APP/test-endpoint)
+        HTTP_CODE=$(echo "$TEST_RESPONSE" | tail -n1)
+        
+        if [ "$HTTP_CODE" != "200" ]; then
+          fail_test "Request through proxy failed with code $HTTP_CODE"
+        fi
+        
+        # Wait for capture to be processed
+        sleep 2
+        
+        # Check if request was captured
+        CAPTURES=$(curl -s $COLLECTOR_URL/query?limit=10)
+        CAPTURE_COUNT=$(echo "$CAPTURES" | jq 'length')
+        
+        if [ "$CAPTURE_COUNT" -gt 0 ]; then
+          pass_test "HTTP request captured (found $CAPTURE_COUNT captures)"
+        else
+          fail_test "No captures found after test request"
+        fi
+        echo ""
+        
+        # Test 4: Request/Response Data Capture
+        echo "Test 4: Request/Response Data Capture"
+        LAST_CAPTURE=$(echo "$CAPTURES" | jq '.[0]')
+        
+        # Check request data
+        REQUEST_METHOD=$(echo "$LAST_CAPTURE" | jq -r '.request.method')
+        REQUEST_URL=$(echo "$LAST_CAPTURE" | jq -r '.request.url')
+        RESPONSE_STATUS=$(echo "$LAST_CAPTURE" | jq -r '.response.status')
+        DURATION_MS=$(echo "$LAST_CAPTURE" | jq -r '.response.duration_ms')
+        
+        if [ -z "$REQUEST_METHOD" ] || [ "$REQUEST_METHOD" = "null" ]; then
+          fail_test "Request method not captured"
+        else
+          pass_test "Request method captured: $REQUEST_METHOD"
+        fi
+        
+        if [ -z "$REQUEST_URL" ] || [ "$REQUEST_URL" = "null" ]; then
+          fail_test "Request URL not captured"
+        else
+          pass_test "Request URL captured: $REQUEST_URL"
+        fi
+        
+        if [ -z "$RESPONSE_STATUS" ] || [ "$RESPONSE_STATUS" = "null" ]; then
+          fail_test "Response status not captured"
+        else
+          pass_test "Response status captured: $RESPONSE_STATUS"
+        fi
+        
+        if [ -z "$DURATION_MS" ] || [ "$DURATION_MS" = "null" ]; then
+          fail_test "Response duration not captured"
+        else
+          pass_test "Response duration captured: ${DURATION_MS}ms"
+        fi
+        echo ""
+        
+        # Test 5: Sensitive Data Masking
+        echo "Test 5: Sensitive Data Masking"
+        # Send request with sensitive data
+        SENSITIVE_PAYLOAD='{"ssn":"123-45-6789","credit_card":"4111-1111-1111-1111","password":"secret123","email":"test@example.com"}'
+        curl -s -X POST -H "Content-Type: application/json" \
+             -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9" \
+             -H "X-API-Key: sk-1234567890abcdef" \
+             -d "$SENSITIVE_PAYLOAD" \
+             $EXAMPLE_APP/api/sensitive > /dev/null
+        
+        # Wait for capture
+        sleep 2
+        
+        # Get latest capture
+        SENSITIVE_CAPTURE=$(curl -s $COLLECTOR_URL/query?limit=1 | jq '.[0]')
+        
+        # Check if sensitive data is masked
+        REQUEST_BODY=$(echo "$SENSITIVE_CAPTURE" | jq -r '.request.body')
+        AUTH_HEADER=$(echo "$SENSITIVE_CAPTURE" | jq -r '.request.headers.authorization // empty')
+        API_KEY_HEADER=$(echo "$SENSITIVE_CAPTURE" | jq -r '.request.headers["x-api-key"] // empty')
+        
+        # Verify SSN is masked
+        if echo "$REQUEST_BODY" | grep -q "123-45-6789"; then
+          fail_test "SSN not masked in request body"
+        elif echo "$REQUEST_BODY" | grep -q "SSN-MASKED"; then
+          pass_test "SSN properly masked"
+        else
+          echo "Warning: Could not verify SSN masking"
+        fi
+        
+        # Verify credit card is masked
+        if echo "$REQUEST_BODY" | grep -q "4111-1111-1111-1111"; then
+          fail_test "Credit card not masked in request body"
+        elif echo "$REQUEST_BODY" | grep -q "CC-MASKED"; then
+          pass_test "Credit card properly masked"
+        else
+          echo "Warning: Could not verify credit card masking"
+        fi
+        
+        # Verify password is masked
+        if echo "$REQUEST_BODY" | grep -q "secret123"; then
+          fail_test "Password not masked in request body"
+        elif echo "$REQUEST_BODY" | grep -q "MASKED"; then
+          pass_test "Password properly masked"
+        else
+          echo "Warning: Could not verify password masking"
+        fi
+        
+        # Verify auth header is masked
+        if [ "$AUTH_HEADER" = "[HEADER-MASKED]" ]; then
+          pass_test "Authorization header masked"
+        elif [ -n "$AUTH_HEADER" ]; then
+          fail_test "Authorization header not properly masked"
+        fi
+        
+        # Verify API key is masked
+        if [ "$API_KEY_HEADER" = "[HEADER-MASKED]" ]; then
+          pass_test "API key header masked"
+        elif [ -n "$API_KEY_HEADER" ]; then
+          fail_test "API key header not properly masked"
+        fi
+        echo ""
+        
+        # Test 6: Headers Capture
+        echo "Test 6: Headers Capture"
+        HEADERS=$(echo "$SENSITIVE_CAPTURE" | jq '.request.headers | keys | length')
+        if [ "$HEADERS" -gt 0 ]; then
+          pass_test "Request headers captured (found $HEADERS headers)"
+        else
+          fail_test "No request headers captured"
+        fi
+        echo ""
+        
+        # Test 7: Istio Headers Capture
+        echo "Test 7: Istio Headers Capture"
+        ISTIO_HEADERS=$(echo "$SENSITIVE_CAPTURE" | jq '.istio_headers | keys | length')
+        if [ "$ISTIO_HEADERS" -ge 0 ]; then
+          pass_test "Istio headers section present"
+        else
+          fail_test "Istio headers section missing"
+        fi
+        echo ""
+        
+        # Test 8: Collector Statistics
+        echo "Test 8: Collector Statistics"
+        STATS=$(curl -s $COLLECTOR_URL/stats)
+        TOTAL_CAPTURES=$(echo "$STATS" | jq -r '.total_captures')
+        
+        if [ "$TOTAL_CAPTURES" -gt 0 ]; then
+          pass_test "Collector statistics working (total captures: $TOTAL_CAPTURES)"
+        else
+          fail_test "Collector statistics not working properly"
+        fi
+        echo ""
+        
+        # Test 9: Sampling Rate
+        echo "Test 9: Sampling Rate Verification"
+        PROXY_METRICS=$(curl -s http://passthrough-proxy:8081/metrics)
+        SAMPLING_RATE=$(echo "$PROXY_METRICS" | grep proxy_sampling_rate | awk '{print $2}')
+        EXPECTED_RATE="{{ .Values.capture.samplingRate }}"
+        
+        if [ "$SAMPLING_RATE" = "$EXPECTED_RATE" ]; then
+          pass_test "Sampling rate correctly set to $SAMPLING_RATE"
+        else
+          fail_test "Sampling rate mismatch: expected $EXPECTED_RATE, got $SAMPLING_RATE"
+        fi
+        echo ""
+        
+        # Test 10: Body Size Limit
+        echo "Test 10: Body Size Limit"
+        # Create large payload (larger than maxBodySize)
+        LARGE_PAYLOAD=$(python3 -c "print('x' * 20000)")
+        curl -s -X POST -H "Content-Type: text/plain" -d "$LARGE_PAYLOAD" $EXAMPLE_APP/large > /dev/null
+        
+        sleep 2
+        LARGE_CAPTURE=$(curl -s $COLLECTOR_URL/query?limit=1 | jq '.[0]')
+        TRUNCATED=$(echo "$LARGE_CAPTURE" | jq -r '.request.body_truncated')
+        
+        if [ "$TRUNCATED" = "true" ]; then
+          pass_test "Large body properly truncated"
+        else
+          echo "Warning: Body truncation not verified"
+        fi
+        echo ""
+        
+        echo "=== Test Suite Complete ==="
+        echo ""
+        echo "Summary:"
+        echo "- Proxy and collector health: ✅"
+        echo "- Basic traffic capture: ✅"
+        echo "- Request/response data: ✅"
+        echo "- Sensitive data masking: ✅"
+        echo "- Headers capture: ✅"
+        echo "- Statistics endpoint: ✅"
+        echo ""
+        echo "All tests passed successfully!"

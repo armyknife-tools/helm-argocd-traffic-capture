@@ -1,0 +1,16 @@
+{{- if .Values.istio.destinationRule.enabled }}
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-services
+  labels:
+    {{- include "traffic-capture.labels" . | nindent 4 }}
+spec:
+  # Apply to all services in the namespace
+  host: "*.{{ .Release.Namespace }}.svc.cluster.local"
+  trafficPolicy:
+    tls:
+      # Use SIMPLE mode for services without Istio sidecars
+      # This allows non-Istio services to communicate with Istio services
+      mode: {{ .Values.istio.destinationRule.tlsMode | default "SIMPLE" }}
+{{- end }}

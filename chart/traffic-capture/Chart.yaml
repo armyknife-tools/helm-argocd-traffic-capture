@@ -1,0 +1,16 @@
+apiVersion: v2
+name: traffic-capture
+description: Istio Traffic Capture Solution for monitoring and collecting HTTP/HTTPS traffic
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/armyknife-tools/test_envoy_filter
+maintainers:
+  - name: Your Team
+    email: team@example.com
+keywords:
+  - istio
+  - traffic-capture
+  - monitoring
+  - observability
+dependencies: []

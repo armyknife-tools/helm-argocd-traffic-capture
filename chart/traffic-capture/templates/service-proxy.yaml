@@ -1,0 +1,44 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "traffic-capture.fullname" . }}-proxy
+  labels:
+    {{- include "traffic-capture.proxyLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  ports:
+    - port: {{ .Values.proxy.service.port }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
+    - port: {{ .Values.proxy.service.healthPort }}
+      targetPort: health
+      protocol: TCP
+      name: health
+  selector:
+    {{- include "traffic-capture.selectorLabels" . | nindent 4 }}
+    app: passthrough-proxy
+---
+# Direct access service (bypasses VirtualService routing)
+apiVersion: v1
+kind: Service
+metadata:
+  name: passthrough-proxy
+  labels:
+    {{- include "traffic-capture.proxyLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  ports:
+    - port: {{ .Values.proxy.service.port }}
+      targetPort: proxy
+      protocol: TCP
+      name: proxy
+    - port: {{ .Values.proxy.service.healthPort }}
+      targetPort: health
+      protocol: TCP
+      name: health
+  selector:
+    {{- include "traffic-capture.selectorLabels" . | nindent 4 }}
+    app: passthrough-proxy
+{{- end }}

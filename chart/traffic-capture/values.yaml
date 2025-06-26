@@ -1,0 +1,130 @@
+# Default values for traffic-capture.
+# This file provides defaults when no external values are specified.
+
+global:
+  environment: dev
+
+capture:
+  enabled: true
+  samplingRate: "1.0"
+  maxBodySize: "16384"
+  maskSensitiveData: true
+
+proxy:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: node
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+    healthPort: 8081
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  istioSidecar:
+    inject: false
+
+collector:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: node
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 9000
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  persistence:
+    enabled: false
+  istioSidecar:
+    inject: false
+
+exampleApp:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: hashicorp/http-echo
+    tag: "0.2.3"
+    pullPolicy: IfNotPresent
+  istioSidecar:
+    inject: true
+
+testClient:
+  enabled: true
+  image:
+    repository: nicolaka/netshoot
+    tag: latest
+    pullPolicy: IfNotPresent
+  istioSidecar:
+    inject: true
+
+virtualService:
+  namespaceScoped:
+    enabled: true
+  globalRouting:
+    enabled: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+    - ALL
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Namespace configuration
+namespace:
+  # Set to true only if you want the chart to create the namespace
+  # Default is false to avoid conflicts with existing namespaces
+  create: false
+  # name: traffic-capture  # Optional: specify namespace name
+  # Enable Istio injection for NEW namespaces only
+  # Has no effect if namespace already exists
+  enableIstioInjection: false
+  labels: {}
+  annotations: {}
+
+# Istio configuration
+istio:
+  # PeerAuthentication allows mixed mTLS/non-mTLS traffic
+  # Ensures compatibility in both Istio and non-Istio environments
+  peerAuthentication:
+    enabled: true
+    # Optional: limit to specific workloads
+    selector: {}
+      # app: example-app
+  # DestinationRule configures client-side TLS
+  destinationRule:
+    enabled: true
+    # SIMPLE = TLS origination for non-Istio clients
+    # ISTIO_MUTUAL = mTLS for Istio clients
+    tlsMode: SIMPLE
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
